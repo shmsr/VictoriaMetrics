@@ -883,9 +883,7 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 				return fmt.Errorf("cannot parse __generation_id label value: %s : %w", generationIDTag.Value, err)
 			}
 			ctx.mb.GenerationID = id
-			// pass nil instead of ctx.mb.MetricName[:0] to avoid
-			// iterator MetricBlockRef corruption
-			ctx.mb.MetricName = mn.Marshal(nil)
+			ctx.mb.MetricName = mn.Marshal(ctx.mb.MetricName[:0])
 		}
 
 		ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
