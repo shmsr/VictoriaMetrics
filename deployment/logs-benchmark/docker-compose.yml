@@ -2,25 +2,38 @@ version: '3'
 
 services:
   filebeat-elastic:
+    container_name: filebeat-elastic
     image: docker.elastic.co/beats/filebeat:8.8.0
+    user: ${USE_UID}
     restart: on-failure
     volumes:
       - ./elk/filebeat/filebeat-elastic.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./filebeat-elastic:/usr/share/filebeat/data
     depends_on: [ elastic ]
+    networks:
+      - logs
 
   filebeat-vlogs:
+    container_name: filebeat-vlogs
     image: docker.elastic.co/beats/filebeat:8.8.0
     restart: on-failure
+    user: ${USE_UID}
     volumes:
       - ./elk/filebeat/filebeat-vlogs.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./filebeat-vlogs:/usr/share/filebeat/data
     depends_on: [ vlogs ]
+    networks:
+      - logs
 
   generator:
+    container_name: generator
     image: golang:1.20-alpine
     restart: always
+    user: ${USE_UID}
     working_dir: /go/src/app
     volumes:
       - ./generator:/go/src/app
+      - ./.cache:/.cache
       - ./source_logs:/go/src/source_logs
     command:
       - go
@@ -29,49 +42,79 @@ services:
       - -logsPath=/go/src/source_logs/logs
       - -outputRateLimitItems=10000
       - -outputRateLimitPeriod=1s
+      - -logs.randomSuffix=false
       - -syslog.addr=filebeat-elastic:12345
       - -syslog.addr2=filebeat-vlogs:12345
-      - -logs.randomSuffix=false
     depends_on: [ filebeat-vlogs, filebeat-elastic ]
+    networks:
+      - logs
 
   elastic:
+    container_name: elastic
     image: docker.elastic.co/elasticsearch/elasticsearch:8.8.0
+    user: ${USE_UID}
     volumes:
       - ./elk/elastic/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
-      - elastic:/usr/share/elasticsearch/data
+      - ./elastic:/usr/share/elasticsearch/data
     environment:
       ES_JAVA_OPTS: "-Xmx2048m"
+    networks:
+      - logs
 
-  # Run `make package-victoria-logs` to build victoria-logs image
+#  # Run `make package-victoria-logs` to build victoria-logs image
   vlogs:
+    container_name: vlogs
     image: docker.io/victoriametrics/victoria-logs:v0.1.0-victorialogs
+    user: ${USE_UID}
     volumes:
-      - vlogs:/vlogs
+      - ./vlogs:/vlogs
     ports:
       - '9428:9428'
     command:
       - -storageDataPath=/vlogs
+    networks:
+      - logs
 
   kibana:
+    container_name: kibana
     image: docker.elastic.co/kibana/kibana:8.8.0
+    user: ${USE_UID}
     volumes:
       - ./elk/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml
     ports:
       - '5601:5601'
     depends_on: [ elastic ]
+    networks:
+      - logs
 
   beat-exporter-elastic:
+    container_name: beat-exporter-elastic
     image: trustpilot/beat-exporter:0.4.0
+    depends_on:
+      - filebeat-elastic
+    user: ${USE_UID}
     command:
       - -beat.uri=http://filebeat-elastic:5066
+    networks:
+      - logs
 
   beat-exporter-vlogs:
+    container_name: beat-exporter-vlogs
     image: trustpilot/beat-exporter:0.4.0
+    depends_on:
+      - filebeat-vlogs
+    user: ${USE_UID}
+    ports:
+      - '9479:9479'
     command:
-      - -beat.uri=http://filebeat-vlogs:5066
+      - -beat.uri=http://filebeat-vlogs:5067
+    networks:
+      - logs
 
   cadvisor:
+    container_name: cadvisor
     image: gcr.io/cadvisor/cadvisor:v0.47.0
+    user: ${USE_UID}
     restart: unless-stopped
     privileged: true
     volumes:
@@ -80,9 +123,13 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+    networks:
+      - logs
 
   node-exporter:
+    container_name: node-exporter
     image: prom/node-exporter:latest
+    user: ${USE_UID}
     restart: unless-stopped
     volumes:
       - /proc:/host/proc:ro
@@ -93,19 +140,27 @@ services:
       - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - logs
 
   du-exporter:
+    container_name: du-exporter
     image: ghcr.io/dundee/disk_usage_exporter/disk_usage_exporter-c4084307c537335c2ddb6f4b9b527422:latest
     restart: unless-stopped
-    user: "root"
+    user: ${USE_UID}
+#    user: "root"
     volumes:
       - /var/lib/docker/volumes:/var/lib/docker/volumes:ro
       - ./du/config.yml:/config.yml:ro
     command:
       - '--config=/config.yml'
+    networks:
+      - logs
 
   vmsingle:
+    container_name: vmsingle
     image: victoriametrics/victoria-metrics:v1.91.2
+    user: ${USE_UID}
     ports:
       - '8428:8428'
     command:
@@ -113,22 +168,35 @@ services:
       - -promscrape.config=/promscrape.yml
       - -promscrape.maxScrapeSize=1Gb
     volumes:
-      - vmsingle:/vmsingle
+      - ./vmsingle:/vmsingle
       - ./vmsingle/promscrape.yml:/promscrape.yml
+#    depends_on:
+#      - beat-exporter-vlogs
+    networks:
+      - logs
 
   grafana:
+    container_name: grafana
     image: grafana/grafana:9.2.7
+    user: ${USE_UID}
     depends_on: [vmsingle]
     ports:
-      - 3000:3000
+      - '3000:3000'
     volumes:
       - grafanadata:/var/lib/grafana
       - ./grafana/provisioning/:/etc/grafana/provisioning/
       - ./grafana/dashboards:/var/lib/grafana/dashboards/
     restart: always
+    networks:
+      - logs
+
 
 volumes:
   elastic:
   vlogs:
   vmsingle:
   grafanadata: {}
+
+networks:
+  logs:
+    driver: bridge
